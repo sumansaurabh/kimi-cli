@@ -158,7 +158,3 @@ make check  # लिंटिंग और टाइप चेकिंग च�
 make test  # टेस्ट चलाएं
 make help  # सभी make टारगेट दिखाएं
 ```
-
-## योगदान
-
-हम Kimi CLI में योगदान का स्वागत करते हैं! अधिक जानकारी के लिए कृपया [CONTRIBUTING.md](./CONTRIBUTING.md) देखें।
