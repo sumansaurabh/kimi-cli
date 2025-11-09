@@ -1,5 +1,6 @@
 """Tests for path utility functions."""
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -201,3 +202,157 @@ async def test_next_available_rotation_directory_pattern_with_extension(tmp_path
 
     # Should find the highest number (3) and return next (4)
     assert result == tmp_path / "my_4.data"
+
+
+@pytest.mark.asyncio
+async def test_next_available_rotation_race_condition_files(tmp_path):
+    """Test next_available_rotation handles race conditions with concurrent file creation."""
+    # Create some existing rotation files
+    (tmp_path / "log_1.txt").write_text("log1")
+    (tmp_path / "log_2.txt").write_text("log2")
+
+    test_file = tmp_path / "log.txt"
+
+    # Simulate concurrent calls to next_available_rotation
+    async def create_rotation():
+        return await next_available_rotation(test_file)
+
+    # Run multiple concurrent rotation attempts
+    results = await asyncio.gather(*[create_rotation() for _ in range(10)])
+
+    # All results should be unique paths
+    assert len(results) == len(set(results)), "All rotation paths should be unique"
+
+    # All created files should exist
+    for result in results:
+        assert result.exists(), f"File {result} should exist"
+
+    # Verify the files are numbered sequentially starting from 3
+    expected_numbers = set(range(3, 13))  # 3 through 12
+    actual_numbers = {int(r.stem.split("_")[1]) for r in results}
+    assert actual_numbers == expected_numbers, "Files should be numbered 3-12"
+
+
+@pytest.mark.asyncio
+async def test_next_available_rotation_race_condition_directories(tmp_path):
+    """Test next_available_rotation handles race conditions with concurrent directory creation."""
+    # Create some existing rotation directories
+    (tmp_path / "backup_1").mkdir()
+    (tmp_path / "backup_2").mkdir()
+
+    test_dir = tmp_path / "backup"
+
+    # Simulate concurrent calls to next_available_rotation
+    async def create_rotation():
+        return await next_available_rotation(test_dir)
+
+    # Run multiple concurrent rotation attempts
+    results = await asyncio.gather(*[create_rotation() for _ in range(10)])
+
+    # All results should be unique paths
+    assert len(results) == len(set(results)), "All rotation paths should be unique"
+
+    # All created directories should exist
+    for result in results:
+        assert result.exists(), f"Directory {result} should exist"
+        assert result.is_dir(), f"{result} should be a directory"
+
+    # Verify the directories are numbered sequentially starting from 3
+    expected_numbers = set(range(3, 13))  # 3 through 12
+    actual_numbers = {int(r.name.split("_")[1]) for r in results}
+    assert actual_numbers == expected_numbers, "Directories should be numbered 3-12"
+
+
+@pytest.mark.asyncio
+async def test_next_available_rotation_atomic_creation_file(tmp_path):
+    """Test that file creation is atomic and doesn't overwrite existing files."""
+    test_file = tmp_path / "data.txt"
+
+    # Create first rotation
+    result1 = await next_available_rotation(test_file)
+    assert result1 == tmp_path / "data_1.txt"
+    assert result1.exists()
+
+    # Write some content to verify it's not overwritten
+    result1.write_text("important data")
+
+    # Create second rotation
+    result2 = await next_available_rotation(test_file)
+    assert result2 == tmp_path / "data_2.txt"
+    assert result2.exists()
+
+    # Verify first file wasn't modified
+    assert result1.read_text() == "important data"
+
+
+@pytest.mark.asyncio
+async def test_next_available_rotation_atomic_creation_directory(tmp_path):
+    """Test that directory creation is atomic and doesn't affect existing directories."""
+    test_dir = tmp_path / "cache"
+
+    # Create first rotation
+    result1 = await next_available_rotation(test_dir)
+    assert result1 == tmp_path / "cache_1"
+    assert result1.exists()
+    assert result1.is_dir()
+
+    # Create a file inside to verify it's not affected
+    (result1 / "marker.txt").write_text("marker")
+
+    # Create second rotation
+    result2 = await next_available_rotation(test_dir)
+    assert result2 == tmp_path / "cache_2"
+    assert result2.exists()
+    assert result2.is_dir()
+
+    # Verify first directory wasn't modified
+    assert (result1 / "marker.txt").exists()
+    assert (result1 / "marker.txt").read_text() == "marker"
+
+
+@pytest.mark.asyncio
+async def test_next_available_rotation_high_concurrency(tmp_path):
+    """Test next_available_rotation with high concurrency (stress test)."""
+    test_file = tmp_path / "concurrent.log"
+
+    # Simulate high concurrent load
+    async def create_rotation():
+        return await next_available_rotation(test_file)
+
+    # Run 50 concurrent rotation attempts
+    results = await asyncio.gather(*[create_rotation() for _ in range(50)])
+
+    # All results should be unique
+    assert len(results) == len(set(results)), "All rotation paths should be unique"
+
+    # All files should exist
+    for result in results:
+        assert result.exists(), f"File {result} should exist"
+
+    # Verify sequential numbering
+    expected_numbers = set(range(1, 51))
+    actual_numbers = {int(r.stem.split("_")[1]) for r in results}
+    assert actual_numbers == expected_numbers, "Files should be numbered 1-50"
+
+
+@pytest.mark.asyncio
+async def test_next_available_rotation_with_gaps_concurrent(tmp_path):
+    """Test concurrent rotation with existing gaps in numbering."""
+    # Create files with gaps
+    (tmp_path / "file_1.txt").write_text("1")
+    (tmp_path / "file_5.txt").write_text("5")
+    (tmp_path / "file_10.txt").write_text("10")
+
+    test_file = tmp_path / "file.txt"
+
+    # Run concurrent rotations
+    async def create_rotation():
+        return await next_available_rotation(test_file)
+
+    results = await asyncio.gather(*[create_rotation() for _ in range(5)])
+
+    # All results should be unique and start from 11 (max_num + 1)
+    assert len(results) == len(set(results))
+    expected_numbers = set(range(11, 16))
+    actual_numbers = {int(r.stem.split("_")[1]) for r in results}
+    assert actual_numbers == expected_numbers
